@@ -1,0 +1,17 @@
+{
+  "name": "steganacrostics",
+  "version": "0.0.1",
+  "description": "Browser-side grammar-constrained LLM generation (acrostics) with transformers.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.1.0"
+  },
+  "devDependencies": {
+    "vite": "^6.4.2"
+  }
+}

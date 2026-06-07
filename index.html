@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Steganacrostics v0</title>
+    <style>
+      body { font: 14px/1.5 -apple-system, ui-sans-serif, system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+      h1 { margin-top: 0; }
+      #output { white-space: pre-wrap; border: 1px solid #ccc; padding: 1rem; min-height: 6rem; margin-top: 1rem; background: #fafafa; border-radius: 4px; }
+      label { display: block; margin-top: 0.75rem; font-weight: 600; font-size: 13px; }
+      textarea, input[type="text"] { width: 100%; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; box-sizing: border-box; padding: 0.4rem; border: 1px solid #ccc; border-radius: 3px; }
+      button { margin-top: 0.75rem; padding: 0.5rem 1rem; font-size: 14px; cursor: pointer; }
+      button[disabled] { cursor: progress; opacity: 0.6; }
+      code { background: #eee; padding: 0.1em 0.3em; border-radius: 3px; }
+
+      /* Settings panel */
+      details.settings { margin-top: 1.25rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa; }
+      details.settings > summary { cursor: pointer; padding: 0.5rem 0.75rem; font-weight: 600; font-size: 13px; user-select: none; list-style: none; }
+      details.settings > summary::-webkit-details-marker { display: none; }
+      details.settings > summary::before { content: "▸ "; display: inline-block; transition: transform 0.15s; margin-right: 0.25rem; }
+      details.settings[open] > summary::before { transform: rotate(90deg); }
+      details.settings .settings-body { padding: 0 0.75rem 0.75rem; }
+
+      #status { color: #555; font-style: italic; font-size: 12px; min-height: 1.2em; margin: 0.25rem 0 0; }
+      #metrics { color: #888; font-size: 12px; margin: 0.5rem 0 0; font-variant-numeric: tabular-nums; }
+
+      /* Self-test block */
+      #self-test { margin-top: 0.75rem; font-size: 12px; }
+      #self-test h4 { margin: 0.75rem 0 0.25rem; font-size: 12px; font-weight: 600; }
+      #self-test pre { white-space: pre-wrap; border: 1px dashed #ccc; background: #fff; padding: 0.4rem 0.6rem; margin: 0; font: 11px ui-monospace, Menlo, monospace; }
+      #self-test .row { margin-top: 0.3rem; }
+      .passed { color: #2d7a2d; }
+      .failed { color: #c03030; }
+      #full-eval { margin-top: 0.5rem; font-size: 12px; }
+      #full-eval h4 { margin: 0.75rem 0 0.25rem; font-size: 12px; font-weight: 600; }
+      #full-eval button { font-size: 12px; padding: 0.25rem 0.6rem; margin-top: 0; }
+      #full-eval-body { margin-top: 0.3rem; }
+      #full-eval-body table { border-collapse: collapse; font: 11px ui-monospace, Menlo, monospace; margin-top: 0.3rem; }
+      #full-eval-body th, #full-eval-body td { border: 1px solid #ddd; padding: 0.15rem 0.4rem; text-align: left; }
+      #full-eval-body th { background: #eee; }
+    </style>
+  </head>
+  <body>
+    <h1>Steganacrostics — v0</h1>
+    <p>SmolLM2-360M-Instruct @ q4f16 via transformers.js (WebGPU backend), loaded locally.</p>
+
+    <label for="secret">Secret (each line will start with these letters):</label>
+    <input id="secret" type="text" value="AB">
+
+    <label for="prompt">Prompt:</label>
+    <textarea id="prompt" rows="2">please list groceries for the week that I should buy</textarea>
+
+    <button id="run" disabled>Loading model…</button>
+
+    <pre id="output"></pre>
+
+    <details class="settings">
+      <summary>⚙️ Settings &amp; diagnostics</summary>
+      <div class="settings-body">
+        <label><input id="listmode" type="checkbox" checked> render as bulleted list (each line prefixed with <code> * </code>)</label>
+        <label for="maxline">Max chars per line (after the prefix + letter):</label>
+        <input id="maxline" type="number" value="80" min="1" max="500" style="width: 6em;">
+
+        <p id="status">initialising…</p>
+        <p id="metrics"></p>
+
+        <div id="self-test">
+          <h4>Startup self-test</h4>
+          <div id="self-test-body">
+            waiting for model load…
+          </div>
+        </div>
+
+        <div id="full-eval">
+          <h4>Full classifier eval (100 prompts)</h4>
+          <button id="run-full-eval" type="button" disabled>Run full eval</button>
+          <div id="full-eval-body"></div>
+        </div>
+      </div>
+    </details>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

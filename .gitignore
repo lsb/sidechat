@@ -1,0 +1,28 @@
+# --- Node / Vite ---
+node_modules/
+dist/
+.vite/
+
+# --- Python (quant pipeline venv + bytecode) ---
+model_work/venv/
+model_work/__pycache__/
+*.pyc
+
+# --- Quant pipeline intermediates ---
+# `model_work/` is a scratchpad for re-running the pipeline locally. The
+# final quantized artifacts ship from `public/local-models/` and are
+# committed there. Everything else in model_work/ is either regenerable
+# (model.onnx, model_fp16.onnx) or exploratory (dedupe_external.py,
+# model_q4f16_hf.onnx, model_q4f16_shared.*, incomplete downloads,
+# hf_cache/).
+model_work/*.onnx
+model_work/*.onnx_data
+model_work/*.onnx_data.*
+model_work/*.onnx_data_*
+model_work/hf_cache/
+model_work/dedupe_external.py
+
+# --- OS / editor / session cruft ---
+.DS_Store
+.claude/
+*.log
