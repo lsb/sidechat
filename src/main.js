@@ -39,6 +39,24 @@ const $listmode = document.getElementById('listmode');
 const $maxline  = document.getElementById('maxline');
 const $prompt   = document.getElementById('prompt');
 const $run      = document.getElementById('run');
+const $subtitle = document.getElementById('subtitle');
+
+const SUBTITLE_DOWNLOADING = 'Downloading 191MB in SmolLM2, chunked here in eight fragments';
+const SUBTITLE_PRETEST     = 'Available. Chat requires one small test. Investigating correctness.';
+const SUBTITLE_READY       = 'Available. Chat ready; output satisfies text input commands.';
+
+// Aggregate download progress across all files reported by transformers.js.
+// Each progress event gives us loaded/total for a single file; we sum across
+// files to compute the overall fraction. `setSubtitleProgress(f)` maps that
+// fraction to the subtitle background: fully red at 0, transparent at 1.
+const fileBytes = new Map();  // file → { loaded, total }
+function setSubtitleProgress(fraction) {
+  const redness = Math.max(0, Math.min(1, 1 - fraction));
+  $subtitle.style.backgroundColor = `rgba(220, 50, 50, ${redness.toFixed(3)})`;
+}
+function clearSubtitleProgress() {
+  $subtitle.style.backgroundColor = '';
+}
 
 const setStatus   = (s) => { $status.textContent = s; };
 const appendOutput = (s) => { $output.textContent += s; };
@@ -118,16 +136,30 @@ async function boot() {
       use_external_data_format: 4,
       progress_callback: (p) => {
         if (p.status === 'progress' && p.file) {
+          if ($subtitle.textContent !== SUBTITLE_DOWNLOADING) {
+            $subtitle.textContent = SUBTITLE_DOWNLOADING;
+          }
+          if (typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) {
+            fileBytes.set(p.file, { loaded: p.loaded, total: p.total });
+            let sumLoaded = 0, sumTotal = 0;
+            for (const v of fileBytes.values()) { sumLoaded += v.loaded; sumTotal += v.total; }
+            setSubtitleProgress(sumTotal > 0 ? sumLoaded / sumTotal : 0);
+          } else if (typeof p.progress === 'number') {
+            setSubtitleProgress(p.progress / 100);
+          }
           const pct = typeof p.progress === 'number' ? p.progress.toFixed(1) : '?';
           setStatus(`downloading ${p.file}: ${pct}%`);
-          setButton(`Loading model… ${pct}%`, true);
         } else if (p.status === 'ready') {
           setStatus('model ready.');
+          $subtitle.textContent = SUBTITLE_PRETEST;
+          clearSubtitleProgress();
         }
       }
     }
   );
   window.__generator = generator;
+  $subtitle.textContent = SUBTITLE_PRETEST;
+  clearSubtitleProgress();
 
   const vocabSize = generator.model.config.vocab_size;
   setStatus(`building token→text table for ${vocabSize} tokens…`);
@@ -175,6 +207,7 @@ async function boot() {
   }
 
   setStatus('model ready. edit the secret and/or prompt, then click Generate.');
+  $subtitle.textContent = SUBTITLE_READY;
   _busyReason = null;
   _refreshButton();
 

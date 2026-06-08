@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Steganacrostics v0</title>
+    <title>Side chat</title>
     <style>
       body { font: 14px/1.5 -apple-system, ui-sans-serif, system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
       h1 { margin-top: 0; }
@@ -14,13 +14,20 @@
       button[disabled] { cursor: progress; opacity: 0.6; }
       code { background: #eee; padding: 0.1em 0.3em; border-radius: 3px; }
 
-      /* Settings panel */
-      details.settings { margin-top: 1.25rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa; }
-      details.settings > summary { cursor: pointer; padding: 0.5rem 0.75rem; font-weight: 600; font-size: 13px; user-select: none; list-style: none; }
+      /* Subtitle doubles as the model-load progress bar: background red fades
+         from fully opaque at 0% loaded to transparent at 100%. Padding stays
+         vertical-only so the text lines up with the rest of the page. */
+      #subtitle { padding: 0.25rem 0; border-radius: 3px; transition: background-color 120ms linear; }
+
+      /* Settings panel — borderless, summary is just the arrow + gear. */
+      details.settings { margin-top: 1.25rem; }
+      details.settings > summary { cursor: pointer; font-size: 13px; user-select: none; list-style: none; }
       details.settings > summary::-webkit-details-marker { display: none; }
       details.settings > summary::before { content: "▸ "; display: inline-block; transition: transform 0.15s; margin-right: 0.25rem; }
       details.settings[open] > summary::before { transform: rotate(90deg); }
-      details.settings .settings-body { padding: 0 0.75rem 0.75rem; }
+      details.settings .settings-body { padding: 0.5rem 0 0; }
+
+      #copyright { text-align: right; color: #888; font-size: 12px; margin: 1.25rem 0 0; }
 
       #status { color: #555; font-style: italic; font-size: 12px; min-height: 1.2em; margin: 0.25rem 0 0; }
       #metrics { color: #888; font-size: 12px; margin: 0.5rem 0 0; font-variant-numeric: tabular-nums; }
@@ -42,11 +49,8 @@
     </style>
   </head>
   <body>
-    <h1>Steganacrostics — v0</h1>
-    <p>SmolLM2-360M-Instruct @ q4f16 via transformers.js (WebGPU backend), loaded locally.</p>
-
-    <label for="secret">Secret (each line will start with these letters):</label>
-    <input id="secret" type="text" value="AB">
+    <h1>Side chat</h1>
+    <p id="subtitle">Not available. Reading yet another source object underway; need data.</p>
 
     <label for="prompt">Prompt:</label>
     <textarea id="prompt" rows="2">please list groceries for the week that I should buy</textarea>
@@ -55,9 +59,14 @@
 
     <pre id="output"></pre>
 
+    <p id="copyright">© 2026 Lee Butterman</p>
+
     <details class="settings">
-      <summary>⚙️ Settings &amp; diagnostics</summary>
+      <summary>⚙️</summary>
       <div class="settings-body">
+        <label for="secret">Secret (each line will start with these letters):</label>
+        <input id="secret" type="text" value="subtle">
+
         <label><input id="listmode" type="checkbox" checked> render as bulleted list (each line prefixed with <code> * </code>)</label>
         <label for="maxline">Max chars per line (after the prefix + letter):</label>
         <input id="maxline" type="number" value="80" min="1" max="500" style="width: 6em;">
