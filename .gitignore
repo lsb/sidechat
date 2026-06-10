@@ -20,6 +20,11 @@ model_work/*.onnx_data.*
 model_work/*.onnx_data_*
 model_work/hf_cache/
 model_work/dedupe_external.py
+# Source download (LiquidAI fp16 ONNX) + KL-test scratch models, written by
+# the scripts in model_work/investigations/. Regenerable, ~2 GB total.
+model_work/lfm2/
+model_work/kl_test_deduped/
+model_work/kl_test_undeduped/
 
 # --- OS / editor / session cruft ---
 .DS_Store

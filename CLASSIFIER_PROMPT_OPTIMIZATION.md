@@ -167,9 +167,9 @@ The only consistent miss on held-out data is `translate "good morning"
 to Japanese` (model reads "to Japanese" + thinks there are multiple
 language options = list). A genuinely borderline prompt.
 
-## Shipping
+## Shipping (SmolLM2-360M)
 
-The winner (`r4_a3_d4_extended_triggers`) is the default in `main.js` via
+The winner (`r4_a3_d4_extended_triggers`) was the default in `main.js` via
 the `CLASSIFIER_VARIANT_NAME` constant. Runs on every debounced prompt
 change (600 ms after last keystroke), typically ~200–600 ms per call on
 WebGPU. Output flips the "render as list" checkbox automatically; user can
@@ -182,3 +182,172 @@ rounds:
 - `window.runRound2/3/4()` — rerun those rounds dev + auto-validation
 - `window.runValidation([names])` — validate a specific list of variants
 - `window.runOneOnDev(name)` — dev for a single variant (fast)
+
+## Round 5 — re-tuning for LFM2.5-350M
+
+When we swapped the model from SmolLM2-360M-Instruct to LFM2.5-350M (see
+`LFM2.5-350M-quantization.md`), the round-4 winner regressed catastrophically:
+
+- `r4_a3_d4_extended_triggers` on LFM2: **68.8% dev / 60% val**, vs 98.8% / 100%
+  on SmolLM2.
+- Every miss was list-prompt → `story.` (25 / 25 dev errors). Prose was 100%.
+
+Hypothesis: LFM2 has a much stronger "story." prior than SmolLM2 given the
+prefill `"The user wants the answer as a "`. Round 4's "Default to list. Use
+story only when …" framing hands the model the keys: it ignores the rule
+and produces the high-prior continuation. A spot-check found
+`r2_intent_story_list` (round-2 winner, simpler intent framing) ported to
+LFM2 at 90% dev — a cleaner starting point for re-tuning.
+
+**Twenty new variants** (R5_VARIANTS in `eval.js`) explored five axes:
+
+- A. Intent framing — variations on `r2_intent_story_list`'s system prompt
+  (5 variants).
+- B. Default-to-`story` flipped polarity with comprehensive list triggers
+  (3 variants).
+- C. Different prefill stems ("The user is asking for a ", "The format
+  should be a ", "Best to render as a ", "The response should be a ", "The
+  output is a ") (5 variants).
+- D. No / minimal system prompt, lean on the prefill (3 variants).
+- E. Branch vocabulary alternatives — `items./text.`, `bullets./paragraph.`,
+  `LIST./STORY.` (3 variants).
+- F. Combined: extended-trigger list + alt prefill (1 variant).
+
+**Round 5 dev results** (top 5):
+
+| Variant | Dev | List miss | Prose miss |
+|---|---:|---:|---:|
+| **r5_a4_intent_two_rules** | **92.5%** | 2 | 4 |
+| r5_a5_intent_minimal_one_line | 91.3% | 4 | 3 |
+| r5_c1_user_asking_for | 91.3% | 0 | 7 |
+| r5_a3_intent_question_words | 88.8% | 5 | 4 |
+| r5_c5_output_is_a | 88.8% | 0 | 9 |
+
+**Validation top 5 + anchors:**
+
+| Variant | Dev | Val |
+|---|---:|---:|
+| **r5_a4_intent_two_rules** | **92.5%** | **80%** |
+| r5_c1_user_asking_for | 91.3% | 80% |
+| r5_c5_output_is_a | 88.8% | 80% |
+| r5_a5_intent_minimal_one_line | 91.3% | 70% |
+| r2_intent_story_list (anchor) | 90% (earlier round) | 70% |
+| r5_a3_intent_question_words | 88.8% | 65% |
+| r4_a3_d4_extended_triggers (old SmolLM2 winner) | 68.8% | 60% |
+
+Three variants tied at 80% val. Pick `r5_a4_intent_two_rules` on dev
+tiebreak + balanced miss types (1L + 3P on val). The system prompt is just
+two sentences:
+
+```
+Classify the user's intent. Use "list" when the answer is a set of separate
+items the user can scan. Use "story" when the answer flows as one
+narrative, single fact, or short paragraph.
+```
+
+Net round 5 win: **+23.7 pp dev / +20 pp val** vs the SmolLM2-tuned r4
+winner on LFM2.
+
+Lessons:
+
+- **"Default to X" framings backfire on LFM2.** SmolLM2 followed the
+  default obediently; LFM2's stronger prior on the *other* token wins.
+  Neutral intent framings ("Classify the user's intent. Complete the
+  sentence.") perform better.
+- **Branch vocabulary still matters but the polarity differs.**
+  `LIST./STORY.` (caps) collapsed to 45% — the model autocompletes "LIST"
+  given any classification framing. `items./text.` (51.2%) and
+  `bullets./paragraph.` (62.5%) also underperformed `list./story.`.
+- **No-system-prompt variants underperform** (60–52%) — the prefill alone
+  isn't enough signal, the system prompt's framing actually does work even
+  for tiny models.
+
+## Round 6 — pinpoint rules
+
+Twenty more variants targeting `r5_a4`'s 12 dev+val misses, which clustered
+into three patterns:
+
+- `write a [haiku/cover-letter/email/joke/love-letter]` → list (should be
+  story) — 6 misses, the largest class.
+- `what is X` (singular fact like "capital of Australia") and `translate X
+  to Y` → list (should be story) — 2 misses.
+- `what are X` / `what are the steps` (plural enumeration) → story (should
+  be list) — 3 misses, the opposite direction.
+
+Five round-5 bases × four ablations:
+
+- v1: `+ write_forms` rule — explicit "Whenever the user asks to 'write' or
+  'compose' a haiku, poem, letter, cover letter, email, joke, story,
+  essay, or limerick, the answer is a story."
+- v2: `+ single_plural` rule — explicit "What is X (single fact) is a
+  story; What are the/some Xs (plural enumeration) is a list; what are
+  the steps/differences/causes/symptoms is a list."
+- v3: `+ translate_email` rule — "Translation requests and email/letter
+  composition are stories."
+- v4: kitchen sink (all three).
+
+**Round 6 dev results** (top 5):
+
+| Variant | Dev | List miss | Prose miss |
+|---|---:|---:|---:|
+| **r6_c1_v2_single_plural** | **97.5%** | 0 | 2 |
+| r6_c1_v3_translate_email | 95.0% | 0 | 4 |
+| r6_a4_v3_translate_email | 93.8% | 2 | 3 |
+| r6_c5_v3_translate_email | 91.3% | 6 | 1 |
+| r6_c1_v1_write_forms | 90.0% | 7 | 1 |
+
+The `+all` kitchen-sink variants regressed on every base (76–81% dev) — too
+many constraints collapse the model into one branch. The c1 base
+("Classify the user's request. Use 'list' when the user wants enumerated
+items. Use 'story' for everything else.") + the single-rule
+`single_plural` was the unique top of the heap.
+
+**Validation top 5 + r5_a4 anchor:**
+
+| Variant | Dev | Val | List miss (val) | Prose miss (val) |
+|---|---:|---:|:---:|:---:|
+| **r6_c1_v2_single_plural** | **97.5%** | **85%** | 0 | 3 |
+| r6_c1_v3_translate_email | 95.0% | 85% | 0 | 3 |
+| r6_c1_v1_write_forms | 90.0% | 85% | 3 | 0 |
+| r6_c5_v3_translate_email | 91.3% | 85% | 2 | 1 |
+| r6_a4_v3_translate_email | 93.8% | 80% | 1 | 3 |
+| r5_a4_intent_two_rules (anchor) | 92.5% | 80% | 1 | 3 |
+
+Four variants tied at 85% val. Tiebreak by dev: **`r6_c1_v2_single_plural`**
+wins (97.5% dev, 0 list-misses on val). Three residual val misses are the
+"Spinal Tap" prompts that have lasted across rounds:
+
+- `translate "good morning" to Japanese`
+- `write a professional email declining a meeting`
+- `what is the capital of Australia?`
+
+Lessons from round 6:
+
+- **One targeted rule beats stacking rules.** `+single_plural` alone hit
+  97.5%; `+all` (single_plural + write_forms + translate_email together)
+  on the same base dropped to 81.3%. The model collapses under too many
+  constraints.
+- **Choose the leanest base.** The c1 base ("Use 'list' for X. Use 'story'
+  otherwise.") + one rule outperformed every variant built on top of the
+  longer round-5 bases.
+- **Failure modes are model-specific.** SmolLM2's miss list (translation,
+  vague borderline cases) was different from LFM2's (write-a-haiku,
+  single-fact "what is X"). Round-by-round error analysis matters more
+  than carrying over rules from a prior model.
+
+## Shipping (LFM2.5-350M)
+
+The current default is **`r6_c1_v2_single_plural`** at 97.5% dev / 85% val.
+Two-round delta from the SmolLM2-tuned r4 winner: **+28.7 pp dev / +25 pp
+val**, no model change.
+
+Final system prompt:
+
+```
+Classify the user's request. Use "list" when the user wants enumerated
+items. Use "story" for everything else. "What is X" (a single fact) is a
+story; "What are the/some Xs" (plural enumeration) is a list; "what are
+the steps/differences/causes/symptoms" is a list.
+```
+
+Prefill: `The user is asking for a `, branches: `list.` / `story.`

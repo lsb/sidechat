@@ -1,10 +1,16 @@
-"""fp32 → fp16 → bake Transpose(embed) → int4 weight-only quantize (MatMulNBits
+"""[fp32 → ] fp16 → bake Transpose(embed) → int4 weight-only quantize (MatMulNBits
 + GatherBlockQuantized, block_size=32, symmetric, accuracy_level=4) → rewrite
 the GatherBlockQuantized int4 weight into uint4 (add 8 to values, zero_point=8)
-so its packed bytes match the MatMulNBits uint8 `[49152, 30, 16]` layout
-exactly → save with external data, both initializers pointing at the SAME
-byte range. On-disk weight stored once, ORT can still decode it through both
-interpretations at load."""
+so its packed bytes match the MatMulNBits uint8 layout exactly → save with
+external data, both initializers pointing at the SAME byte range. On-disk
+weight stored once, ORT can still decode it through both interpretations at
+load.
+
+Model-specific knobs are in the CONFIG block below — change those to retarget
+the script at a different model. SmolLM2-360M and LFM2.5-350M ship with
+`tie_word_embeddings: true` and use the same `model.embed_tokens.weight`
+initializer name, so the only differences are dimensions and whether we have
+to do the fp32→fp16 conversion ourselves."""
 
 from pathlib import Path
 import os
@@ -18,24 +24,49 @@ from collections import Counter
 
 float16.sort_topology = lambda g: None
 
-SRC = Path(__file__).parent / "model.onnx"
-DST = Path(__file__).parent / "model_q4f16.onnx"
-DATA = Path(__file__).parent / "model_q4f16.onnx_data"
+# === CONFIG ================================================================
+# LFM2.5-350M: vocab=65536, hidden=1024; LiquidAI ships fp16 directly so we
+# can skip the float16 conversion. SmolLM2-360M was vocab=49152, hidden=960,
+# SRC=model.onnx (fp32), SRC_IS_FP16=False.
+SRC          = Path(__file__).parent / "lfm2" / "onnx" / "model_fp16.onnx"
+DST          = Path(__file__).parent / "model_q4f16.onnx"
+DATA         = Path(__file__).parent / "model_q4f16.onnx_data"
+SRC_IS_FP16  = True
+VOCAB        = 65536
+HIDDEN       = 1024
+BLOCK_SIZE   = 64                  # HIDDEN must be divisible (LFM2: 1024/64=16)
+TARGET_N_CHUNKS = 4
+CHUNK_HARD_CAP  = 50 * 1000 * 1000  # GitHub Pages 100MB cap with headroom
+assert HIDDEN % BLOCK_SIZE == 0, "BLOCK_SIZE must divide HIDDEN evenly"
+N_BLOCKS = HIDDEN // BLOCK_SIZE
+BLOB_SIZE = BLOCK_SIZE // 2        # uint8 bytes per block (2 int4 vals/byte)
+# ===========================================================================
 
 
 def bake_transpose_into_initializer(model):
+    """Replace `Transpose(initializer)` with a precomputed transposed
+    initializer named `<input>_transposed`, and rewire consumers of the old
+    Transpose output to read the new initializer. Deterministic naming matters
+    because the downstream MatMulNBits quantization derives the int4 weight
+    name from the initializer name (`<name>_Q4`/`<name>_scales`)."""
     inits = {i.name: i for i in model.graph.initializer}
-    new_inits, to_remove = [], []
+    new_inits, to_remove, rename = [], [], {}
     for node in list(model.graph.node):
         if node.op_type != "Transpose" or len(node.input) != 1 or node.input[0] not in inits:
             continue
         arr = onnx.numpy_helper.to_array(inits[node.input[0]])
         perm = next((a.ints for a in node.attribute if a.name == "perm"), list(reversed(range(arr.ndim))))
-        new_inits.append(onnx.numpy_helper.from_array(np.transpose(arr, list(perm)).copy(), name=node.output[0]))
+        new_name = f"{node.input[0]}_transposed"
+        new_inits.append(onnx.numpy_helper.from_array(np.transpose(arr, list(perm)).copy(), name=new_name))
+        rename[node.output[0]] = new_name
         to_remove.append(node)
     for n in to_remove:
         model.graph.node.remove(n)
     model.graph.initializer.extend(new_inits)
+    for node in model.graph.node:
+        for i, inp in enumerate(node.input):
+            if inp in rename:
+                node.input[i] = rename[inp]
     return len(to_remove)
 
 
@@ -45,19 +76,20 @@ def summarize(path):
 
 
 # === 1. Quantize as normal (produces separate bytes for GBQ int4 and MNB uint8)
-print(f"loading {SRC} (≈1.45 GB)…")
-model_fp32 = onnx.load(str(SRC))
-print("fp32 → fp16 → bake Transpose → quantize…")
-model_fp16 = float16.convert_float_to_float16(
-    # keep_io_types=False makes the model's own inputs/outputs fp16 too, so
-    # transformers.js at `dtype: 'q4f16'` (which feeds fp16 tensors through
-    # the generate loop) matches the graph signature exactly. With True we'd
-    # get "Unexpected input data type. Actual: float16, expected: float" at
-    # inference time on the fp32 input ports.
-    model_fp32, keep_io_types=False, disable_shape_infer=True, check_fp16_ready=False,
-)
+print(f"loading {SRC}…")
+model_fp16 = onnx.load(str(SRC))
+if not SRC_IS_FP16:
+    print("fp32 → fp16…")
+    model_fp16 = float16.convert_float_to_float16(
+        # keep_io_types=False makes the model's own inputs/outputs fp16 too, so
+        # transformers.js at `dtype: 'q4f16'` (which feeds fp16 tensors through
+        # the generate loop) matches the graph signature exactly. With True we'd
+        # get "Unexpected input data type. Actual: float16, expected: float" at
+        # inference time on the fp32 input ports.
+        model_fp16, keep_io_types=False, disable_shape_infer=True, check_fp16_ready=False,
+    )
+print("bake Transpose → quantize…")
 bake_transpose_into_initializer(model_fp16)
-BLOCK_SIZE = 64  # 960 / 64 = 15 blocks, exact fit (same as 32; saves ~1.5 MB of scales)
 quantizer = matmul_nbits_quantizer.MatMulNBitsQuantizer(
     model_fp16,
     algo_config=matmul_nbits_quantizer.DefaultWeightOnlyQuantConfig(
@@ -73,25 +105,25 @@ for o in model.opset_import:
         o.version = 21
 
 inits = {i.name: i for i in model.graph.initializer}
-GATHER_W = "model.embed_tokens.weight_Q4"            # int4  [49152, 960]
-GATHER_S = "model.embed_tokens.weight_scales"        # fp16  [49152, 30]
-MNB_W    = "model.embed_tokens.weight_transposed_Q4"  # uint8 [49152, 30, 16]
-MNB_S    = "model.embed_tokens.weight_transposed_scales"  # fp16 [49152, 30]
+GATHER_W = "model.embed_tokens.weight_Q4"            # int4  [VOCAB, HIDDEN]
+GATHER_S = "model.embed_tokens.weight_scales"        # fp16  [VOCAB, N_BLOCKS]
+MNB_W    = "model.embed_tokens.weight_transposed_Q4"  # uint8 [VOCAB, N_BLOCKS, BLOB_SIZE]
+MNB_S    = "model.embed_tokens.weight_transposed_scales"  # fp16 [VOCAB, N_BLOCKS]
 
 # === 2. Verify scales are identical; measure how close the two quantizers
 #        came to bit-for-bit agreement on the packed bytes, then use the
 #        MatMulNBits bytes for both (nudges ~0.3% of embedding positions by
 #        ±1 int4 step; well within noise).
-g_int4 = onnx.numpy_helper.to_array(inits[GATHER_W]).astype(np.int32)  # [49152, 960] signed
+g_int4 = onnx.numpy_helper.to_array(inits[GATHER_W]).astype(np.int32)  # [VOCAB, HIDDEN] signed
 g_scales = onnx.numpy_helper.to_array(inits[GATHER_S])
 m_scales = onnx.numpy_helper.to_array(inits[MNB_S])
 assert np.array_equal(g_scales, m_scales), "scales differ; dedupe unsafe"
 u4 = ((g_int4 + 8) % 16).astype(np.uint8)
 packed = (u4[:, 0::2] | (u4[:, 1::2] << 4)).astype(np.uint8)
 mnb_bytes = bytes(inits[MNB_W].raw_data) if inits[MNB_W].raw_data else onnx.numpy_helper.to_array(inits[MNB_W]).tobytes()
-mnb_flat = np.frombuffer(mnb_bytes, dtype=np.uint8).reshape(49152, 480)
+mnb_flat = np.frombuffer(mnb_bytes, dtype=np.uint8).reshape(VOCAB, HIDDEN // 2)
 agree = (packed == mnb_flat).mean()
-print(f"gather(+8) vs matmulnbits packed bytes agree on {agree*100:.2f}% of 23.6M bytes "
+print(f"gather(+8) vs matmulnbits packed bytes agree on {agree*100:.2f}% of {mnb_flat.size/1e6:.1f}M bytes "
       f"(remainder differs by ≤ one int4 step, FP rounding in independent codepaths)")
 shared_bytes = mnb_bytes  # use the MatMulNBits bytes as the canonical shared copy
 
@@ -104,8 +136,8 @@ shared_bytes = mnb_bytes  # use the MatMulNBits bytes as the canonical shared co
 # uint4). Shape matches scales: [49152, n_blocks]. ONNX packs uint4 as two
 # values per byte in *flat* element order, so for odd n_blocks the row
 # boundaries don't align to byte boundaries — must pack over the flat array.
-n_blocks = 960 // BLOCK_SIZE
-total_zp = 49152 * n_blocks
+n_blocks = N_BLOCKS
+total_zp = VOCAB * n_blocks
 zp_flat = np.full(total_zp, 8, dtype=np.uint8)
 # Pack 2 uint4 values per byte, low nibble first
 zp_packed = np.zeros((total_zp + 1) // 2, dtype=np.uint8)
@@ -122,11 +154,11 @@ def make_uint4_tensor(name, shape, packed_bytes):
     t.raw_data = bytes(packed_bytes)
     return t
 
-zp_init = make_uint4_tensor("model.embed_tokens.weight_zero_point", [49152, n_blocks], zp_packed.tobytes())
+zp_init = make_uint4_tensor("model.embed_tokens.weight_zero_point", [VOCAB, n_blocks], zp_packed.tobytes())
 
 # Replace the int4 Gather weight with a uint4 tensor holding the +8-shifted bytes
 shared_bytes = mnb_bytes  # the bytes both ops will reference
-new_gather_weight = make_uint4_tensor(GATHER_W, [49152, 960], shared_bytes)
+new_gather_weight = make_uint4_tensor(GATHER_W, [VOCAB, HIDDEN], shared_bytes)
 
 # Rebuild the initializer list: drop old Gather int4 + old MNB uint8 + add the new uint4 + zero_point
 new_inits = []
@@ -141,15 +173,15 @@ new_inits.append(zp_init)
 # We ALSO need MatMulNBits to reference the shared uint4 bytes. MatMulNBits
 # expects B with shape [N, n_blocks, blob_size] and dtype uint8. ONNX treats
 # each initializer as a distinct named tensor; we cannot reuse GATHER_W (a
-# uint4 [49152, 960] tensor) as B (a uint8 [49152, 30, 16] tensor) because
-# the (shape, dtype) differ. BUT: when we later write the external data file
-# below, we point both initializer protos at the SAME byte offset in the
-# file — disk-level dedupe.
-# Recreate MNB_W as a uint8 [49152, n_blocks, BLOCK_SIZE//2] tensor holding the same bytes:
+# uint4 [VOCAB, HIDDEN] tensor) as B (a uint8 [VOCAB, n_blocks, blob_size]
+# tensor) because the (shape, dtype) differ. BUT: when we later write the
+# external data file below, we point both initializer protos at the SAME
+# byte offset in the file — disk-level dedupe.
+# Recreate MNB_W as a uint8 [VOCAB, n_blocks, BLOB_SIZE] tensor holding the same bytes:
 mnb_tensor = TensorProto()
 mnb_tensor.name = MNB_W
 mnb_tensor.data_type = TensorProto.UINT8
-mnb_tensor.dims.extend([49152, n_blocks, BLOCK_SIZE // 2])
+mnb_tensor.dims.extend([VOCAB, n_blocks, BLOB_SIZE])
 mnb_tensor.raw_data = shared_bytes
 new_inits.append(mnb_tensor)
 
@@ -175,8 +207,6 @@ print("rewrote Gather's int4 weight → uint4 (values +=8 mod 16, zero_point=8);
 #        reference the same (location, offset, length) in the first chunk —
 #        the 23.59 MB embedding is stored exactly once on disk.
 
-TARGET_N_CHUNKS = 4            # exactly this many chunk files
-CHUNK_HARD_CAP = 50 * 1000 * 1000  # no chunk may exceed 50 MB (decimal)
 BASE_NAME = "model_q4f16.onnx_data"
 
 class ChunkWriter:
@@ -233,15 +263,14 @@ for init in model.graph.initializer:
     if init.raw_data and len(init.raw_data) >= EXTERNAL_THRESHOLD:
         total_external += len(init.raw_data)
 
-ideal_per_chunk = (total_external + TARGET_N_CHUNKS - 1) // TARGET_N_CHUNKS
-# Add a small slack (2%) so greedy packing doesn't spill into a 5th chunk.
+# Bump the chunk count if the configured target won't fit under the hard cap.
+n_chunks = max(TARGET_N_CHUNKS, (total_external + CHUNK_HARD_CAP - 1) // CHUNK_HARD_CAP)
+ideal_per_chunk = (total_external + n_chunks - 1) // n_chunks
+# Add a small slack (2%) so greedy packing doesn't spill into an extra chunk.
 chunk_cap = int(ideal_per_chunk * 1.02)
-assert chunk_cap <= CHUNK_HARD_CAP, (
-    f"total external data {total_external/1e6:.1f} MB too large to fit in "
-    f"{TARGET_N_CHUNKS} chunks of ≤ {CHUNK_HARD_CAP/1e6:.0f} MB each"
-)
+assert chunk_cap <= CHUNK_HARD_CAP, "chunk cap exceeded hard cap after sizing"
 print(f"external data total {total_external/1e6:.2f} MB → chunk cap {chunk_cap/1e6:.2f} MB "
-      f"({TARGET_N_CHUNKS} chunks target)")
+      f"({n_chunks} chunks)")
 
 writer = ChunkWriter(Path(__file__).parent, BASE_NAME, chunk_cap)
 

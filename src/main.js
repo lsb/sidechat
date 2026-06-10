@@ -41,7 +41,7 @@ const $prompt   = document.getElementById('prompt');
 const $run      = document.getElementById('run');
 const $subtitle = document.getElementById('subtitle');
 
-const SUBTITLE_DOWNLOADING = 'Downloading 191MB in SmolLM2, chunked here in eight fragments';
+const SUBTITLE_DOWNLOADING = 'Downloading over 208 MB (one-shot transfer)';
 const SUBTITLE_PRETEST     = 'Available. Chat requires one small test. Investigating correctness.';
 const SUBTITLE_READY       = 'Available. Chat ready; output satisfies text input commands.';
 
@@ -123,17 +123,17 @@ async function boot() {
   // _busyReason starts as 'loading model'; button already shows "Loading
   // model…". We update the button label live as the download progresses,
   // but we don't release the lock until the self-test has finished below.
-  setStatus('loading SmolLM2-360M-Instruct @ q4f16 (local MatMulNBits/GatherBlockQuantized build)…');
+  setStatus('loading LFM2.5-350M @ q4f16 (local MatMulNBits/GatherBlockQuantized build)…');
 
   const generator = await pipeline(
     'text-generation',
-    'HuggingFaceTB/SmolLM2-360M-Instruct',
+    'LiquidAI/LFM2.5-350M',
     {
       dtype: 'q4f16',
       device: 'webgpu',
-      // Our model ships its weights in 4 external-data chunks named
-      // model_q4f16.onnx_data, _data_1, _data_2, _data_3.
-      use_external_data_format: 4,
+      // Our model ships its weights in 6 external-data chunks named
+      // model_q4f16.onnx_data, _data_1, … _data_5.
+      use_external_data_format: 6,
       progress_callback: (p) => {
         if (p.status === 'progress' && p.file) {
           if ($subtitle.textContent !== SUBTITLE_DOWNLOADING) {
@@ -520,7 +520,7 @@ async function runFullEval(ctx, body) {
 // "default to list; use story only for <long explicit trigger list>" rule, no
 // few-shot. See src/eval.js for the variant definition and runAllOnDev /
 // runRound{2,3,4} on window for reproducing the sweep.
-const CLASSIFIER_VARIANT_NAME = 'r4_a3_d4_extended_triggers';
+const CLASSIFIER_VARIANT_NAME = 'r6_c1_v2_single_plural';
 
 // Callers hold the busy lock (reason='classifying prompt'); this just runs
 // the inference and flips the checkbox.

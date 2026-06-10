@@ -836,6 +836,257 @@ Examples:
 
 VARIANTS.push(...R4_A_VARIANTS, ...R4_B_VARIANTS, ...R4_C_VARIANTS, ...R4_D_VARIANTS, ...R4_E_VARIANTS);
 
+// Round 5 — re-tuning for LFM2.5-350M, which has a strong "story." prior given
+// any "Default to list" framing (round-4 winners drop to ~50–69% on LFM2 with
+// every miss being list→story). The round-2 winner `r2_intent_story_list` ports
+// to LFM2 at 90% (3 list, 5 prose misses), so this round explores variations
+// of the intent framing plus alternative prefills, branch vocabularies, and
+// the flipped (default-to-story) polarity.
+const R5_VARIANTS = [
+  // A. Intent framing — variations on r2_intent_story_list (90% LFM2 baseline).
+  {
+    name: 'r5_a1_intent_extended_list',
+    system:
+      `Classify the user's intent. Complete the sentence. Use "list" when the user wants enumerated items: "list", "name N", "give N", "ways to", "tips for", "steps to", "reasons", "examples of", "what are the", "what are some", "what tools/symptoms/causes", "top N", "suggest", "common", "primary", "main differences". Use "story" for everything else — narrative, stories, explanations, translations, poems, emails, descriptions, single facts.`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_a2_intent_short',
+    system: `Classify the user's intent. Complete the sentence.`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_a3_intent_question_words',
+    system:
+      `Classify the user's intent. Complete the sentence. The user wants a list when they ask "what are the/some X (plural)", "name X", "list X", "top N", "ways/tips/steps/reasons/examples", "suggest X", "give me N". Otherwise the user wants a story (narrative, single answer, explanation, translation, story, poem).`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_a4_intent_two_rules',
+    system:
+      `Classify the user's intent. Use "list" when the answer is a set of separate items the user can scan. Use "story" when the answer flows as one narrative, single fact, or short paragraph.`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_a5_intent_minimal_one_line',
+    system: `Decide whether the user is asking for a list of items or a single narrative answer.`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+
+  // B. Default-to-story (flipped polarity), comprehensive list-triggers.
+  {
+    name: 'r5_b1_story_default_extended',
+    system:
+      `Classify the user's request. Default to "story". Use "list" only when the user clearly asks for enumerated items: "list", "name N", "give N", "ways to", "tips for", "steps to", "reasons", "examples of", "what are the/some X (plural)", "what tools/symptoms/causes/highlights", "top N", "suggest some", "common X", "primary X", "main differences".`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_b2_story_default_short',
+    system:
+      `Classify the user's request. Default to "story". Use "list" when the user explicitly asks for multiple discrete items.`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_b3_story_default_question_form',
+    system:
+      `Classify the user's request. Default to "story" (single narrative answer). Use "list" when the prompt asks "what are the/some X (plural)", "name N X", "list X", "ways to X", "tips for X", "top N X", "suggest some X".`,
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+
+  // C. Different prefill stems (same intent-style system).
+  {
+    name: 'r5_c1_user_asking_for',
+    system:
+      `Classify the user's request. Use "list" when the user wants enumerated items. Use "story" for everything else.`,
+    prefill: 'The user is asking for a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_c2_format_should_be',
+    system:
+      `Classify the user's request. Use "list" for enumerated items, "story" for everything else.`,
+    prefill: 'The format should be a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_c3_render_as',
+    system:
+      `Classify the user's request. Use "list" when the answer is best rendered as enumerated items. Use "story" otherwise.`,
+    prefill: 'Best to render as a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_c4_response_kind',
+    system:
+      `Classify the user's request. Use "list" for enumerated items, "story" for narrative or single answers.`,
+    prefill: 'The response should be a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_c5_output_is_a',
+    system:
+      `Classify the user's request as a list (enumerated items) or a story (narrative / single answer).`,
+    prefill: 'The output is a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+
+  // D. No / minimal system prompt, lean on the prefill.
+  {
+    name: 'r5_d1_no_system',
+    system: '',
+    prefill: 'The intent is to get a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_d2_no_system_response',
+    system: '',
+    prefill: 'The response should be a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+  {
+    name: 'r5_d3_q_a_completion',
+    system: `Decide whether the user wants a list or a story.`,
+    prefill: 'Answer: a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+
+  // E. Branch vocabulary alternatives (everything else equal).
+  {
+    name: 'r5_e1_branches_items_text',
+    system:
+      `Classify the user's intent. Use "items" when the user wants enumerated items. Use "text" for everything else (narrative, single answer, explanation, translation, story, poem).`,
+    prefill: 'The intent is to get ',
+    branches: ['items.', 'text.'],
+    parse: (s) => s.startsWith('items'),
+  },
+  {
+    name: 'r5_e2_branches_bullets_paragraph',
+    system:
+      `Classify the user's intent. Use "bullets" for enumerated items, "paragraph" for narrative or single answers.`,
+    prefill: 'The intent is to get ',
+    branches: ['bullets.', 'paragraph.'],
+    parse: (s) => s.startsWith('bullets'),
+  },
+  {
+    name: 'r5_e3_branches_caps',
+    system:
+      `Classify the user's request. Reply LIST for enumerated items, STORY for narrative or single answers.`,
+    prefill: 'The intent is to get a ',
+    branches: ['LIST.', 'STORY.'],
+    parse: (s) => s.startsWith('LIST'),
+  },
+
+  // F. Combined: extended-trigger list + flipped polarity + alt prefill.
+  {
+    name: 'r5_f1_response_format_extended',
+    system:
+      `Classify the user's request. Use "list" when the user asks for enumerated items: "list", "name N", "give N", "ways to", "tips for", "steps to", "reasons", "examples of", "what are the/some X (plural)", "top N", "suggest some". Use "story" for everything else (narrative, single answer, explanation, translation, story, poem).`,
+    prefill: 'The response format should be a ',
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  },
+];
+
+VARIANTS.push(...R5_VARIANTS);
+
+// Round 6 — refining round 5's top 5 (r5_a4, r5_a5, r5_c1, r5_a3, r5_c5).
+// r5_a4_intent_two_rules' 12 misses on dev+val cluster around three patterns:
+//   • "write a [haiku/letter/email/joke/poem/story]" → list (should be story) — 6 misses
+//   • "what is X" (singular fact) and "translate X to Y" → list (should be story) — 2
+//   • "what are X" / "what are the steps" (plural enumeration) → story (should be list) — 3
+// Each round-5 base gets four ablations: +write-forms rule, +singular-vs-plural
+// rule, +translate/email rule, then a kitchen-sink combining all three.
+const R6_VARIANTS = [];
+
+const R6_BASES = [
+  {
+    base: 'a4',
+    system_prefix: `Classify the user's intent. Use "list" when the answer is a set of separate items the user can scan. Use "story" when the answer flows as one narrative, single fact, or short paragraph.`,
+    prefill: 'The intent is to get a ',
+  },
+  {
+    base: 'a5',
+    system_prefix: `Decide whether the user is asking for a list of items or a single narrative answer.`,
+    prefill: 'The intent is to get a ',
+  },
+  {
+    base: 'c1',
+    system_prefix: `Classify the user's request. Use "list" when the user wants enumerated items. Use "story" for everything else.`,
+    prefill: 'The user is asking for a ',
+  },
+  {
+    base: 'a3',
+    system_prefix: `Classify the user's intent. Complete the sentence. The user wants a list when they ask "what are the/some X (plural)", "name X", "list X", "top N", "ways/tips/steps/reasons/examples", "suggest X", "give me N". Otherwise the user wants a story (narrative, single answer, explanation, translation, story, poem).`,
+    prefill: 'The intent is to get a ',
+  },
+  {
+    base: 'c5',
+    system_prefix: `Classify the user's request as a list (enumerated items) or a story (narrative / single answer).`,
+    prefill: 'The output is a ',
+  },
+];
+
+const RULE_WRITE_FORMS = ` Whenever the user asks to "write" or "compose" a haiku, poem, letter, cover letter, email, joke, story, essay, or limerick, the answer is a story.`;
+const RULE_SINGLE_PLURAL = ` "What is X" (a single fact) is a story; "What are the/some Xs" (plural enumeration) is a list; "what are the steps/differences/causes/symptoms" is a list.`;
+const RULE_TRANSLATE_EMAIL = ` Translation requests ("translate X to Y") and email/letter composition are stories.`;
+
+for (const { base, system_prefix, prefill } of R6_BASES) {
+  R6_VARIANTS.push({
+    name: `r6_${base}_v1_write_forms`,
+    system: system_prefix + RULE_WRITE_FORMS,
+    prefill,
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  });
+  R6_VARIANTS.push({
+    name: `r6_${base}_v2_single_plural`,
+    system: system_prefix + RULE_SINGLE_PLURAL,
+    prefill,
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  });
+  R6_VARIANTS.push({
+    name: `r6_${base}_v3_translate_email`,
+    system: system_prefix + RULE_TRANSLATE_EMAIL,
+    prefill,
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  });
+  R6_VARIANTS.push({
+    name: `r6_${base}_v4_all`,
+    system: system_prefix + RULE_WRITE_FORMS + RULE_SINGLE_PLURAL + RULE_TRANSLATE_EMAIL,
+    prefill,
+    branches: ['list.', 'story.'],
+    parse: (s) => s.startsWith('list'),
+  });
+}
+
+VARIANTS.push(...R6_VARIANTS);
+
 // Helper: filter variants by name prefix (for running just round-2).
 export function variantsWithPrefix(prefix) {
   return VARIANTS.filter((v) => v.name.startsWith(prefix));
