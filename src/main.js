@@ -546,6 +546,14 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
   const maxLine = Math.max(1, parseInt($maxline.value, 10) || 80);
   const prompt = $prompt.value;
 
+  // Nudge the content shape to fit the acrostic line structure: plain text, no
+  // markdown/bold/headings/numbered lists — those strand "**"/"#"/"1." fragments
+  // when the per-letter line chopping cuts through them. Tailored per mode so
+  // list mode still gets list-style items.
+  const systemPrompt = listMode
+    ? 'You are a helpful assistant. Answer as a plain bulleted list — one short item per line. Do not use markdown, bold text, headings, code, or numbered lists.'
+    : 'You are a helpful assistant. Answer in plain prose. Do not use markdown, bold text, headings, code, or bulleted/numbered lists.';
+
   let grammar;
   try {
     grammar = buildGrammar(secret, listMode, maxLine);
@@ -567,7 +575,7 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
   setStatus('generating (grammar-constrained)…');
 
   const messages = [
-    { role: 'system', content: 'You are a helpful assistant.' },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: prompt }
   ];
 
