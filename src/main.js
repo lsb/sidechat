@@ -1,6 +1,7 @@
 import { env, pipeline, TextStreamer, LogitsProcessorList } from '@huggingface/transformers';
 import { compileAcrostic, compileLiteral, unionGrammars } from './grammar.js';
 import { GrammarLogitsProcessor, buildTokenTextTable } from './logits.js';
+import { generateCrossingSearch } from './crossingSearch.js';
 import { VARIANTS, classify as classifyWithVariant, runAllOnDev, runOnValidation, variantsWithPrefix, runVariantsOnDev } from './eval.js';
 
 // --- Backend setup ---------------------------------------------------------
@@ -40,6 +41,10 @@ const $maxline  = document.getElementById('maxline');
 const $prompt   = document.getElementById('prompt');
 const $run      = document.getElementById('run');
 const $subtitle = document.getElementById('subtitle');
+const $crossing  = document.getElementById('crossing');
+const $winK      = document.getElementById('winK');
+const $winJ      = document.getElementById('winJ');
+const $maxRewind = document.getElementById('maxRewind');
 
 const SUBTITLE_DOWNLOADING = 'Downloading over 208 MB (one-shot transfer)';
 const SUBTITLE_PRETEST     = 'Available. Chat requires one small test. Investigating correctness.';
@@ -549,7 +554,7 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
   // Nudge the content shape to fit the acrostic line structure: plain text, no
   // markdown/bold/headings/numbered lists — those strand "**"/"#"/"1." fragments
   // when the per-letter line chopping cuts through them. Tailored per mode so
-  // list mode still gets list-style items.
+  // list mode still gets list-style items. Shared by greedy and the lookahead.
   const systemPrompt = listMode
     ? 'You are a helpful assistant. Answer as a plain bulleted list — one short item per line. Do not use markdown, bold text, headings, code, or numbered lists.'
     : 'You are a helpful assistant. Answer in plain prose. Do not use markdown, bold text, headings, code, or bulleted/numbered lists.';
@@ -562,6 +567,52 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
     return;
   }
   console.log(`[grammar] secret=${JSON.stringify(secret)} listMode=${listMode} maxLine=${maxLine}`);
+
+  // --- Local-crossing-objective search (behind the toggle) ------------------
+  // Greedy by default (R=0). When on, generate each line greedily, then choose
+  // where to break it (0..R tokens earlier, only at word boundaries) to maximise
+  // the plausibility of a short window straddling the crossing: the last k
+  // content tokens + the next line's forced letter + j tokens. The structural
+  // newline is never scored, so there's no run-to-the-wall bias. See
+  // src/crossingSearch.js and ACROSTIC_DECODING_SEARCH.md.
+  // Prose only: in list mode each line is a self-contained item with no flow
+  // across the break, so optimizing the crossing just chops items into
+  // fragments — list mode falls through to plain greedy below.
+  if ($crossing && $crossing.checked && !listMode) {
+    const k = Math.max(0, parseInt($winK?.value, 10) || 4);
+    const j = Math.max(0, parseInt($winJ?.value, 10) || 3);
+    const R = Math.max(0, parseInt($maxRewind?.value, 10) || 4);
+    setStatus(`generating (local-crossing search, k=${k}, j=${j}, R=${R})…`);
+    const tStart = performance.now();
+    const { text, perLine } = await generateCrossingSearch(
+      { generator, tokenText, eosTokenIds },
+      { grammar, secret, maxLine, prompt, systemPrompt, k, j, R, onLine: (lineText) => appendOutput(lineText) },
+    );
+    const tEnd = performance.now();
+
+    let nMoved = 0;
+    for (const { line, chosen, r, candidates } of perLine) {
+      if (r > 0) nMoved++;
+      console.log(`[crossing] line ${line}: break r=${r} → ${JSON.stringify(chosen)}`);
+      if (candidates && candidates.length > 1) {
+        console.table(candidates.map((c) => ({
+          r: c.r,
+          endsWith: JSON.stringify(c.preview),
+          score: +c.score.toFixed(3),
+          nBefore: c.nBefore,
+          nAfter: c.nAfter,
+        })));
+      }
+    }
+
+    const acro = checkAcrostic(text, secret);
+    console.log(`[crossing] wall=${(tEnd - tStart).toFixed(0)}ms · ${nMoved}/${perLine.length} breaks moved earlier · acrostic ${acro.ok ? 'OK' : 'MISS'} (firsts=${JSON.stringify(acro.firsts)})`);
+    $metrics.textContent =
+      `local-crossing · ${((tEnd - tStart) / 1000).toFixed(2)}s · ${perLine.length} lines · ` +
+      `${nMoved} breaks moved · acrostic ${acro.ok ? 'OK' : 'MISS'} (${acro.firsts})`;
+    setStatus('done (local-crossing search). edit the secret and/or prompt and click Generate again.');
+    return;
+  }
 
   const processor = new GrammarLogitsProcessor({
     grammar,

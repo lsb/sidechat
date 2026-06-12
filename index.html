@@ -71,6 +71,14 @@
         <label for="maxline">Max chars per line (after the prefix + letter):</label>
         <input id="maxline" type="number" value="80" min="1" max="500" style="width: 6em;">
 
+        <label><input id="crossing" type="checkbox"> local-crossing search — prose only (greedy line, then pick the break that makes the crossing read best; list mode stays greedy)</label>
+        <label for="winK">↳ window before the break (k content tokens):</label>
+        <input id="winK" type="number" value="4" min="0" max="20" style="width: 6em;">
+        <label for="winJ">↳ window after the forced letter (j content tokens):</label>
+        <input id="winJ" type="number" value="3" min="0" max="20" style="width: 6em;">
+        <label for="maxRewind">↳ max tokens to trim the break earlier (R; 0 = greedy):</label>
+        <input id="maxRewind" type="number" value="4" min="0" max="12" style="width: 6em;">
+
         <p id="status">initialising…</p>
         <p id="metrics"></p>
 
