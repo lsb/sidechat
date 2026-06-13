@@ -584,9 +584,23 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
     const R = Math.max(0, parseInt($maxRewind?.value, 10) || 4);
     setStatus(`generating (local-crossing search, k=${k}, j=${j}, R=${R})…`);
     const tStart = performance.now();
+    // Safe-prefix streaming: show each line as it generates, but lag the display
+    // by R tokens (the trim zone) so we only reveal tokens the break can't
+    // remove. onLine then commits the authoritative (possibly-trimmed) line — the
+    // tail fills in, no retraction.
+    let committedDisplay = '';
+    let lineChunks = [];
+    const renderStream = () => {
+      const safe = lineChunks.slice(0, Math.max(0, lineChunks.length - R)).join('');
+      $output.textContent = committedDisplay + safe;
+    };
     const { text, perLine } = await generateCrossingSearch(
       { generator, tokenText, eosTokenIds },
-      { grammar, secret, maxLine, prompt, systemPrompt, k, j, R, onLine: (lineText) => appendOutput(lineText) },
+      {
+        grammar, secret, maxLine, prompt, systemPrompt, k, j, R,
+        onToken: (t) => { lineChunks.push(t); renderStream(); },
+        onLine: (lineText) => { committedDisplay += lineText; lineChunks = []; $output.textContent = committedDisplay; },
+      },
     );
     const tEnd = performance.now();
 

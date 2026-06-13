@@ -27,7 +27,7 @@ import {
 // log-prob per step, and — at its first step, when captureTopN > 0 — (b) the
 // top-N legal tokens and (c) the surprise signal (unmasked −log p_best_legal).
 export class LineMaskScore extends LogitsProcessor {
-  constructor({ grammar, startState, tokenizer, tokenText, eosTokenIds = [], captureTopN = 0 }) {
+  constructor({ grammar, startState, tokenizer, tokenText, eosTokenIds = [], captureTopN = 0, forceLowerFirst = false }) {
     super();
     this.grammar = grammar;
     this.startState = startState;
@@ -35,6 +35,7 @@ export class LineMaskScore extends LogitsProcessor {
     this.tokenText = tokenText;
     this.eosTokenIds = new Set(eosTokenIds.map(Number));
     this.captureTopN = captureTopN;
+    this.forceLowerFirst = forceLowerFirst;  // at the line's first token, prefer the lowercase forced letter
     this.promptLength = undefined;
     this.stepLogprobs = [];   // chosen (argmax) log-prob, one per generated step
     this.topN = null;         // [{id, logit, logprob}] from the first step
@@ -68,9 +69,7 @@ export class LineMaskScore extends LogitsProcessor {
       lseAll = maxAll + Math.log(s);
     }
 
-    // Mask illegal tokens; track the best *legal* (original) logit and survivors.
-    let maxLegal = -Infinity;
-    const survivors = wantSignal ? [] : null;
+    // Mask illegal tokens.
     for (let i = 0; i < this.tokenText.length; i++) {
       let legal;
       if (this.eosTokenIds.has(i)) {
@@ -79,7 +78,36 @@ export class LineMaskScore extends LogitsProcessor {
         const tok = this.tokenText[i];
         legal = !!tok && this.grammar.advance(state, tok) !== -1;
       }
-      if (!legal) { data[i] = -Infinity; continue; }
+      if (!legal) data[i] = -Infinity;
+    }
+
+    // Stealth casing: at the line's first token, if this line continues a
+    // sentence, prefer the lowercase forced letter. The model defaults to
+    // capitalising after a newline, which is wrong mid-sentence AND makes the
+    // hidden acrostic legible down the margin. Only applied when a
+    // lowercase-initial legal token exists (never create a dead end).
+    if (this.forceLowerFirst && generated.length === 0) {
+      const firstAlpha = (t) => { const m = t && t.match(/[A-Za-z]/); return m ? m[0] : null; };
+      let anyLower = false;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] === -Infinity) continue;
+        const c = firstAlpha(this.tokenText[i]);
+        if (c && c === c.toLowerCase() && c !== c.toUpperCase()) { anyLower = true; break; }
+      }
+      if (anyLower) {
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] === -Infinity) continue;
+          const c = firstAlpha(this.tokenText[i]);
+          if (c && c === c.toUpperCase() && c !== c.toLowerCase()) data[i] = -Infinity;
+        }
+      }
+    }
+
+    // Best *legal* logit + survivors, after all masking.
+    let maxLegal = -Infinity;
+    const survivors = wantSignal ? [] : null;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] === -Infinity) continue;
       if (data[i] > maxLegal) maxLegal = data[i];
       if (survivors) survivors.push([i, data[i]]);
     }

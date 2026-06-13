@@ -23,7 +23,7 @@
 // is always a valid token-prefix of a grammar-legal line, so there's no
 // gobbledygook risk even if a window score is slightly mis-estimated.
 
-import { LogitsProcessorList, StoppingCriteriaList } from '@huggingface/transformers';
+import { LogitsProcessorList, StoppingCriteriaList, TextStreamer } from '@huggingface/transformers';
 import { LineMaskScore, NewlineStop } from './surprisalLookahead.js';
 
 function oneProcessor(proc) {
@@ -43,7 +43,8 @@ export async function generateCrossingSearch(ctx, {
   k = 4,           // window: content tokens before the break
   j = 3,           // window: content tokens after the forced letter
   R = 4,           // max tokens to trim back from the line's natural end
-  onLine = null,
+  onToken = null,  // live token stream of the line being generated (lagged by R upstream)
+  onLine = null,   // a line was committed (authoritative; replaces the streamed tail)
 } = {}) {
   const { generator, tokenText, eosTokenIds } = ctx;
   const tokenizer = generator.tokenizer;
@@ -54,6 +55,13 @@ export async function generateCrossingSearch(ctx, {
   ];
   const promptString = tokenizer.apply_chat_template(messages, { tokenize: false, add_generation_prompt: true });
   const encIds = (text) => Array.from(tokenizer(text, { add_special_tokens: false }).input_ids.data, Number);
+  // Mid-sentence iff the text so far doesn't end a sentence — then the next
+  // forced letter should be lowercase (grammatically right, and keeps the
+  // acrostic hidden). Empty prefix (line 0) is a sentence start → capital ok.
+  const midSentence = (t) => {
+    const s = (t || '').replace(/\s+$/, '');
+    return s.length > 0 && !/[.!?]["'”’)\]]?$/.test(s);
+  };
 
   // Greedy line from `prefixText` (acrostic text so far). Returns the line text
   // (incl. trailing newline for non-last lines), the line's token ids, and the
@@ -61,12 +69,15 @@ export async function generateCrossingSearch(ctx, {
   const genLine = async (prefixText, isLast) => {
     const startState = grammar.advance(grammar.initial, prefixText);
     const ctxStr = promptString + prefixText;
-    const proc = new LineMaskScore({ grammar, startState, tokenizer, tokenText, eosTokenIds });
+    const proc = new LineMaskScore({ grammar, startState, tokenizer, tokenText, eosTokenIds, forceLowerFirst: midSentence(prefixText) });
     const stops = new StoppingCriteriaList();
     if (!isLast) stops.push(new NewlineStop(tokenizer, encIds(ctxStr).length));
+    const streamer = onToken
+      ? new TextStreamer(tokenizer, { skip_prompt: true, skip_special_tokens: true, callback_function: onToken })
+      : undefined;
     const out = await generator(ctxStr, {
       max_new_tokens: maxLine + 8, do_sample: false, return_full_text: false, add_special_tokens: false,
-      logits_processor: oneProcessor(proc), stopping_criteria: stops,
+      logits_processor: oneProcessor(proc), stopping_criteria: stops, streamer,
     });
     let text = out[0].generated_text;
     if (!isLast) { const nl = text.indexOf('\n'); if (nl !== -1) text = text.slice(0, nl + 1); }
@@ -80,7 +91,7 @@ export async function generateCrossingSearch(ctx, {
   const rollOpen = async (prefixText, n) => {
     const startState = grammar.advance(grammar.initial, prefixText);
     if (startState === -1) return [];
-    const proc = new LineMaskScore({ grammar, startState, tokenizer, tokenText, eosTokenIds });
+    const proc = new LineMaskScore({ grammar, startState, tokenizer, tokenText, eosTokenIds, forceLowerFirst: midSentence(prefixText) });
     const stops = new StoppingCriteriaList();
     stops.push(new NewlineStop(tokenizer, encIds(promptString + prefixText).length));
     await generator(promptString + prefixText, {

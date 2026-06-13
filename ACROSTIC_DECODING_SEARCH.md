@@ -137,17 +137,29 @@ mis-estimated.
 - **The Curious Case of Neural Text Degeneration** (Holtzman et al.): why
   maximising probability yields degenerate text.
 
+## Resolved along the way
+
+- **Streaming (done).** The per-line search can't reveal a token the break might
+  trim, but the first `n−R` tokens of a line are guaranteed kept. So we stream
+  each line token-by-token *lagged by R* (the trim zone) via a `TextStreamer`
+  whose chunks `main.js` buffers; `onLine` then commits the authoritative
+  (possibly-trimmed) line and the tail fills in — no retraction. Inter-line
+  pauses (the crossing rollouts) remain inherent to search.
+- **Acrostic casing / stealth (done).** The capitalised forced letters weren't
+  the model's style — greedy keeps them lowercase (it breaks mid-word at the
+  wall, so continuations are clearly mid-sentence), while the crossing search's
+  *clean* breaks land at clause/sentence boundaries, after which the model
+  capitalises (its "new line → capital" prior) — even after a comma
+  (`underbrush, Surprised`), which is wrong AND makes the hidden word legible
+  down the margin (`SUBTLE`). Fix: at a line's first token, if the previous line
+  didn't end in `.?!`, force the forced letter **lowercase** (the grammar already
+  allows it; we just mask the uppercase variant when a lowercase one exists).
+  Result: `Subtle`, not `SUBTLE` — the acrostic hides in flowing prose. This is
+  the steganacrostics goal, so it's on by default in the crossing path.
+
 ## Open questions / next
 
-1. **Streaming.** Greedy streams token-by-token (TextStreamer); the per-line
-   search reveals whole committed lines because the break trim isn't known until
-   candidates are scored. The first `n−R` tokens of a line are guaranteed kept,
-   so they *could* be streamed; the last `R` must wait for the break decision.
-2. **Style drift (e.g. all-caps).** Some prompts (a whimsical "love story…")
-   come out in ALL CAPS. Is that the model's natural style for the prompt, a
-   case-insensitive-grammar interaction at line starts, or search-induced? Needs
-   a greedy-vs-crossing reproduction.
-3. **Breadth + tuning.** Does this hold over ~20 prompts × several secret words,
-   and what `(k, j, R)` / prompt config wins most often? Wants a generation-eval
-   harness like the classifier eval in `eval.js` — the hard part is an automatic
-   quality metric beyond "acrostic correct".
+- **Breadth + tuning.** Does this hold over ~20 prompts × several secret words,
+  and what `(k, j, R)` / prompt config wins most often? Wants a generation-eval
+  harness like the classifier eval in `eval.js` — the hard part is an automatic
+  quality metric beyond "acrostic correct". (Trying prompts by hand first.)
