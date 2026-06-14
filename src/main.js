@@ -547,7 +547,11 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
   clearOutput();
   $metrics.textContent = '';
 
-  const secret = $secret.value.trim();
+  // Strip spaces: a multi-word secret like "i love you so much" spells its
+  // letters across lines (iloveyousomuch); spaces would otherwise force odd
+  // punctuation-prefixed "word-break" lines that stand out and degenerate. The
+  // field still shows the spaced version; the acrostic just uses the letters.
+  const secret = $secret.value.trim().replace(/\s+/g, '');
   const listMode = $listmode.checked;
   const maxLine = Math.max(1, parseInt($maxline.value, 10) || 80);
   const prompt = $prompt.value;
