@@ -43,6 +43,7 @@ export async function generateCrossingSearch(ctx, {
   k = 4,           // window: content tokens before the break
   j = 3,           // window: content tokens after the forced letter
   R = 4,           // max tokens to trim back from the line's natural end
+  minLine = 30,    // forbid a line (and a break) shorter than this many chars
   onToken = null,  // live token stream of the line being generated (lagged by R upstream)
   onLine = null,   // a line was committed (authoritative; replaces the streamed tail)
 } = {}) {
@@ -69,7 +70,7 @@ export async function generateCrossingSearch(ctx, {
   const genLine = async (prefixText, isLast) => {
     const startState = grammar.advance(grammar.initial, prefixText);
     const ctxStr = promptString + prefixText;
-    const proc = new LineMaskScore({ grammar, startState, tokenizer, tokenText, eosTokenIds, forceLowerFirst: midSentence(prefixText) });
+    const proc = new LineMaskScore({ grammar, startState, tokenizer, tokenText, eosTokenIds, forceLowerFirst: midSentence(prefixText), minLine });
     const stops = new StoppingCriteriaList();
     if (!isLast) stops.push(new NewlineStop(tokenizer, encIds(ctxStr).length));
     const streamer = onToken
@@ -142,6 +143,9 @@ export async function generateCrossingSearch(ctx, {
       // (where it sits after the " * " bullet), which would break the acrostic
       // and cascade into empty lines. r=0 (the full line) is always legal.
       if (grammar.advance(lineStartState, brokeLine) === -1) continue;
+      // Don't let the break trim a line below the minimum (r=0 is exempt — the
+      // full greedy line already respects minLine via the mask above).
+      if (r > 0 && prefixText.length < minLine) continue;
 
       // "before" window: last k content log-probs (drop the trailing newline's).
       let beforeLps = lps.slice(0, m - r);

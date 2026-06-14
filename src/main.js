@@ -45,6 +45,7 @@ const $crossing  = document.getElementById('crossing');
 const $winK      = document.getElementById('winK');
 const $winJ      = document.getElementById('winJ');
 const $maxRewind = document.getElementById('maxRewind');
+const $minLine   = document.getElementById('minLine');
 
 const SUBTITLE_DOWNLOADING = 'Downloading over 208 MB (one-shot transfer)';
 const SUBTITLE_PRETEST     = 'Available. Chat requires one small test. Investigating correctness.';
@@ -582,7 +583,8 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
     const k = Math.max(0, parseInt($winK?.value, 10) || 4);
     const j = Math.max(0, parseInt($winJ?.value, 10) || 3);
     const R = Math.max(0, parseInt($maxRewind?.value, 10) || 4);
-    setStatus(`generating (local-crossing search, k=${k}, j=${j}, R=${R})…`);
+    const minLine = Math.min(maxLine, Math.max(0, parseInt($minLine?.value, 10) || 30));
+    setStatus(`generating (local-crossing search, k=${k}, j=${j}, R=${R}, minLine=${minLine})…`);
     const tStart = performance.now();
     // Safe-prefix streaming: show each line as it generates, but lag the display
     // by R tokens (the trim zone) so we only reveal tokens the break can't
@@ -597,7 +599,7 @@ async function runGeneration({ generator, tokenText, eosTokenIds }) {
     const { text, perLine } = await generateCrossingSearch(
       { generator, tokenText, eosTokenIds },
       {
-        grammar, secret, maxLine, prompt, systemPrompt, k, j, R,
+        grammar, secret, maxLine, prompt, systemPrompt, k, j, R, minLine,
         onToken: (t) => { lineChunks.push(t); renderStream(); },
         onLine: (lineText) => { committedDisplay += lineText; lineChunks = []; $output.textContent = committedDisplay; },
       },

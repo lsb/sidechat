@@ -27,7 +27,7 @@ import {
 // log-prob per step, and — at its first step, when captureTopN > 0 — (b) the
 // top-N legal tokens and (c) the surprise signal (unmasked −log p_best_legal).
 export class LineMaskScore extends LogitsProcessor {
-  constructor({ grammar, startState, tokenizer, tokenText, eosTokenIds = [], captureTopN = 0, forceLowerFirst = false }) {
+  constructor({ grammar, startState, tokenizer, tokenText, eosTokenIds = [], captureTopN = 0, forceLowerFirst = false, minLine = 0 }) {
     super();
     this.grammar = grammar;
     this.startState = startState;
@@ -36,6 +36,7 @@ export class LineMaskScore extends LogitsProcessor {
     this.eosTokenIds = new Set(eosTokenIds.map(Number));
     this.captureTopN = captureTopN;
     this.forceLowerFirst = forceLowerFirst;  // at the line's first token, prefer the lowercase forced letter
+    this.minLine = minLine;                  // forbid ending the line until it has ≥ minLine chars
     this.promptLength = undefined;
     this.stepLogprobs = [];   // chosen (argmax) log-prob, one per generated step
     this.topN = null;         // [{id, logit, logprob}] from the first step
@@ -99,6 +100,26 @@ export class LineMaskScore extends LogitsProcessor {
           if (data[i] === -Infinity) continue;
           const c = firstAlpha(this.tokenText[i]);
           if (c && c === c.toUpperCase() && c !== c.toLowerCase()) data[i] = -Infinity;
+        }
+      }
+    }
+
+    // Minimum line length: while the line is still short, forbid the line-enders
+    // (newline tokens + EOS) so a forced letter can't produce a stubby line.
+    // Skip if no non-ender survivor remains (never create a dead end). `gen` is
+    // this line's text so far (NewlineStop means it holds no newline yet).
+    if (this.minLine && gen.length < this.minLine) {
+      let anyBody = false;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] === -Infinity || this.eosTokenIds.has(i)) continue;
+        const t = this.tokenText[i];
+        if (t && !t.includes('\n')) { anyBody = true; break; }
+      }
+      if (anyBody) {
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] === -Infinity) continue;
+          const t = this.tokenText[i];
+          if (this.eosTokenIds.has(i) || (t && t.includes('\n'))) data[i] = -Infinity;
         }
       }
     }
